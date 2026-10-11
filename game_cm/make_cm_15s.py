@@ -4,9 +4,10 @@
 
 カット構成:
     0.0- 3.0s  キーアート（夕焼けの縁側）  「どこか懐かしい、あの秋を、もう一度。」
-               人物と背景を分けた2.5Dカメラ / 呼吸 / ススキの揺れ / 赤とんぼ
+               人物と背景を分けた2.5Dカメラ / 呼吸 / 首の動き / 柴犬のハァハァ・まばたき / ススキ / 赤とんぼ
     3.0- 6.0s  思い出の写真が机に落ちてくる（川・自転車・秋祭り・花火）  着地でゆらっと揺れる
-    6.0- 9.5s  なかまたち（キャラクター4人）  切り抜いた4人が順にジャンプして登場 → 揺れながら待機
+    6.0- 9.5s  なかまたち（キャラクター4人）  切り抜いた4人が順にジャンプして登場 → それぞれの仕草
+               （タイチ：アゴしゃくり / やっさん：笑い・指差し / トシヒコ：網振り / クルミ：のぞき込み・まばたき）
     9.5-12.0s  集合写真  「何もなかった。だから、全部あった。」  人物と背景を分けた2.5Dカメラ
    12.0-15.0s  タイトル『ぼくと、あの秋。』
 
@@ -282,6 +283,152 @@ def sway_grass(arr, f, region, amp=7.0):
     return arr
 
 
+# ---------------------------------------------------------------- パペット変形（キャラ自体の動き）
+# 切り抜いた人物画像をボーンごとに滑らかに変形させる。座標はレイヤー元画像のピクセル。
+#   ("rot",   中心, (rx, ry), 支点, 角度deg)   … 首かしげ・うなずき・腕振り・網振り
+#   ("move",  中心, (rx, ry), (dx, dy))        … 口のパクパク（犬のハァハァ）
+#   ("blink", 目の中心, (rx, ry), 閉じ具合0-1) … まばたき
+def blink_amount(lf, times, dur=5):
+    """times のフレームでまばたき（閉じ→開く）."""
+    a = 0.0
+    for t0 in times:
+        d = lf - t0
+        if 0 <= d <= dur:
+            a = max(a, math.sin(math.pi * d / dur))
+    return a
+
+
+def soft_ellipse(xx, yy, c, r, inner=0.55):
+    d = np.sqrt(((xx - c[0]) / r[0]) ** 2 + ((yy - c[1]) / r[1]) ** 2)
+    t = np.clip((d - inner) / (1 - inner), 0, 1)
+    return 1 - t * t * (3 - 2 * t)
+
+
+_grid_cache = {}
+
+
+def puppet(layer, bones, scale=1.0, off=(0.0, 0.0)):
+    """layer: RGBA Image. bones の座標は (元座標 - off) * scale でこのレイヤーに対応させる."""
+    w, h = layer.size
+    if (w, h) not in _grid_cache:
+        gy, gx = np.mgrid[0:h, 0:w].astype(np.float32)
+        _grid_cache[(w, h)] = (gx, gy)
+    gx, gy = _grid_cache[(w, h)]
+    mx, my = gx.copy(), gy.copy()
+    T = lambda pt: ((pt[0] - off[0]) * scale, (pt[1] - off[1]) * scale)
+    src = np.asarray(layer)
+    # まばたきは変形前の画像に描く（首の回転に目がついていくように）
+    blinks = [b for b in bones if b[0] == "blink" and b[3] > 0.02]
+    if blinks:
+        src = src.astype(np.float32)
+        for _, c, r, k in blinks:
+            c, r = T(c), (r[0] * scale, r[1] * scale)
+            x0, x1 = int(max(0, c[0] - r[0] * 1.3)), int(min(w, c[0] + r[0] * 1.3 + 1))
+            y0, y1 = int(max(0, c[1] - r[1] * 1.6)), int(min(h, c[1] + r[1] * 1.6 + 1))
+            lid_y = int(max(0, c[1] - r[1] * 1.55))
+            if x0 >= x1 or y0 >= y1:
+                continue
+            xx, yy = gx[y0:y1, x0:x1], gy[y0:y1, x0:x1]
+            # まぶた：目のすぐ上の肌の行を縦に引き伸ばして目を覆う
+            lid = src[lid_y:lid_y + 2, x0:x1].mean(0, keepdims=True)
+            m = soft_ellipse(xx, yy, c, (r[0] * 1.2, r[1] * 1.45), inner=0.45)[..., None] * k
+            src[y0:y1, x0:x1, :3] = src[y0:y1, x0:x1, :3] * (1 - m) + lid[..., :3] * m
+            # まつ毛の線（閉じた目の下側の弧）
+            u = (xx - c[0]) / r[0]
+            ly = c[1] + r[1] * 0.45 * (1 - u ** 2)
+            line = np.clip(1 - np.abs(yy - ly) / max(1.0, 0.9 * scale), 0, 1) * (np.abs(u) < 1) * k ** 2
+            src[y0:y1, x0:x1, :3] *= (1 - 0.6 * line)[..., None]
+    for b in bones:
+        kind, c, r = b[0], T(b[1]), (b[2][0] * scale, b[2][1] * scale)
+        if kind == "blink":
+            continue
+        ext = 1.0
+        x0, x1 = int(max(0, c[0] - r[0] * ext)), int(min(w, c[0] + r[0] * ext + 1))
+        y0, y1 = int(max(0, c[1] - r[1] * ext)), int(min(h, c[1] + r[1] * ext + 1))
+        if x0 >= x1 or y0 >= y1:
+            continue
+        xx, yy = gx[y0:y1, x0:x1], gy[y0:y1, x0:x1]
+        if kind == "rot":
+            pv, ang = T(b[3]), b[4]
+            if abs(ang) < 1e-3:
+                continue
+            wgt = soft_ellipse(xx, yy, c, r)
+            th = -np.radians(ang) * wgt
+            dx, dy = xx - pv[0], yy - pv[1]
+            mx[y0:y1, x0:x1] += (pv[0] + dx * np.cos(th) - dy * np.sin(th)) - xx
+            my[y0:y1, x0:x1] += (pv[1] + dx * np.sin(th) + dy * np.cos(th)) - yy
+        elif kind == "move":
+            wgt = soft_ellipse(xx, yy, c, r, inner=0.35)
+            mx[y0:y1, x0:x1] -= wgt * b[3][0] * scale
+            my[y0:y1, x0:x1] -= wgt * b[3][1] * scale
+    arr = cv2.remap(np.clip(src, 0, 255).astype(np.uint8), mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(0, 0, 0, 0))
+    return Image.fromarray(arr)
+
+
+def osc(lf, period, phase=0.0):
+    return math.sin(2 * math.pi * lf / period + phase)
+
+
+def bones_key(f):
+    """縁側：主人公は空を見上げながらゆっくり首を動かし、柴犬は首をかしげてハァハァ."""
+    return [
+        ("rot", (590, 100), (85, 80), (585, 165), 2.5 * osc(f, 70, 0.5)),
+        ("rot", (665, 315), (75, 62), (705, 372), 5.0 * osc(f, 46, 1.0) + (6 if 50 < f < 75 else 0) *
+         math.sin(math.pi * clamp01((f - 50) / 25))),
+        ("move", (645, 342), (32, 20), (0, 2.6 * (0.5 + 0.5 * osc(f, 6)))),
+        ("blink", (670, 292), (8, 4), blink_amount(f, [28, 78])),
+    ]
+
+
+def bones_char(i, lf, land):
+    d = lf - land  # 着地からのフレーム数
+    on = clamp01(d / 6) if d >= 0 else 0.0
+    if i == 0:  # タイチ：着地で「ついてこいや！」とアゴをしゃくる
+        jerk = -9 * math.exp(-max(d - 3, 0) / 7) * math.sin(clamp01((d - 3) / 6) * math.pi) if d >= 3 else 0
+        return [("rot", (198, 80), (75, 90), (200, 155), jerk + 2 * on * osc(lf, 50)),
+                ("blink", (163, 90), (11, 5), blink_amount(d, [30, 66])),
+                ("blink", (205, 86), (11, 5), blink_amount(d, [30, 66]))]
+    if i == 1:  # やっさん：笑って頭を揺らし、指差しの手をクイクイ、ジュースを振る
+        return [("rot", (212, 90), (78, 82), (215, 168), on * 4 * osc(lf, 9)),
+                ("rot", (150, 245), (80, 48), (45, 290), on * 8 * osc(lf, 14)),
+                ("rot", (282, 200), (48, 62), (300, 330), on * 6 * osc(lf, 11, 1.0)),
+                ("blink", (207, 94), (11, 5), blink_amount(d, [40])),
+                ("blink", (252, 103), (11, 5), blink_amount(d, [40]))]
+    if i == 2:  # トシヒコ：虫取り網をゆらゆら、首をかしげる
+        return [("rot", (60, 200), (95, 175), (62, 455), on * 9 * osc(lf, 30)),
+                ("rot", (218, 95), (72, 82), (218, 172), on * 4 * osc(lf, 40, 2.0)),
+                ("blink", (199, 110), (10, 5), blink_amount(d, [22, 58])),
+                ("blink", (241, 105), (10, 5), blink_amount(d, [22, 58]))]
+    # クルミちゃん：上半身をゆらしてのぞき込み、首をかしげる
+    return [("rot", (170, 165), (150, 190), (160, 330), on * 2.5 * osc(lf, 44, 1.0)),
+            ("rot", (188, 85), (68, 78), (182, 150), on * 5 * osc(lf, 44, 2.6)),
+            ("blink", (173, 82), (10, 5), blink_amount(d, [15, 52])),
+            ("blink", (208, 75), (10, 5), blink_amount(d, [15, 52]))]
+
+
+def bones_group(lf):
+    """集合写真：それぞれ首を動かし、やっさんは親指をクイッ、柴犬はハァハァ."""
+    return [
+        ("rot", (340, 330), (85, 95), (350, 430), 2.0 * osc(lf, 46, 0.3)),
+        ("rot", (630, 180), (80, 90), (630, 268), 3.0 * osc(lf, 10)),
+        ("rot", (528, 262), (55, 66), (470, 372), 7.0 * osc(lf, 14)),
+        ("rot", (810, 330), (95, 100), (820, 432), 2.0 * osc(lf, 60, 1.2)),
+        ("rot", (1030, 220), (80, 90), (1040, 300), 3.0 * osc(lf, 38, 2.0)),
+        ("rot", (1215, 420), (75, 88), (1210, 505), 4.0 * osc(lf, 42, 0.8)),
+        ("rot", (1040, 630), (95, 90), (1040, 735), 4.0 * osc(lf, 34, 1.7)),
+        ("move", (1045, 688), (48, 30), (0, 4.0 * (0.5 + 0.5 * osc(lf, 6)))),
+        ("blink", (293, 362), (13, 6), blink_amount(lf, [30])),
+        ("blink", (349, 353), (13, 6), blink_amount(lf, [30])),
+        ("blink", (998, 216), (12, 5), blink_amount(lf, [46])),
+        ("blink", (1052, 211), (12, 5), blink_amount(lf, [46])),
+        ("blink", (1210, 409), (12, 5), blink_amount(lf, [18, 62])),
+        ("blink", (1261, 412), (12, 5), blink_amount(lf, [18, 62])),
+        ("blink", (1011, 607), (11, 6), blink_amount(lf, [54])),
+        ("blink", (1068, 607), (11, 6), blink_amount(lf, [54])),
+    ]
+
+
 # ---------------------------------------------------------------- 仕上げ（色調・ビネット・粒子）
 _yy, _xx = np.mgrid[0:H, 0:W].astype(np.float32)
 VIGNETTE = 1 - 0.38 * (((_xx - W / 2) / (W * 0.62)) ** 2 + ((_yy - H / 2) / (H * 0.68)) ** 2)
@@ -362,14 +509,21 @@ def main():
     key_bg = key_bg.filter(ImageFilter.UnsharpMask(2.5, 70, 2))
     key_fg = Image.open(layers / "key_fg.png").convert("RGBA").resize(keyart.size, Image.LANCZOS)
     key_fg = key_fg.filter(ImageFilter.UnsharpMask(2.5, 70, 2))
+    KEY_S = keyart.width / 805.0
+    GRP_S = (W + 240) / 1536.0
 
     # キャラクター（切り抜き）: 元パネルと同じ縮尺で並べる
     CH_S = 0.84
+    CH_PAD = 40
     char_imgs = []
     for i in range(4):
         c = Image.open(layers / f"char{i}.png").convert("RGBA")
-        char_imgs.append(c.resize((int(c.width * CH_S), int(c.height * CH_S)), Image.LANCZOS)
-                         .filter(ImageFilter.UnsharpMask(2, 50, 2)))
+        c = c.resize((int(c.width * CH_S), int(c.height * CH_S)), Image.LANCZOS).filter(
+            ImageFilter.UnsharpMask(2, 50, 2))
+        # 首を回したときに頭が切れないよう上と左右に余白
+        padded = Image.new("RGBA", (c.width + CH_PAD * 2, c.height + CH_PAD), (0, 0, 0, 0))
+        padded.paste(c, (CH_PAD, CH_PAD))
+        char_imgs.append(padded)
     char_x = [330, 755, 1170, 1590]
     GROUND = 1040
     tag_specs = [("タイチ", (52, 110, 196)), ("やっさん", (232, 132, 30)), ("トシヒコ", (58, 140, 66)),
@@ -429,7 +583,8 @@ def main():
         # 背景はゆっくり、人物はやや速く寄る＝奥行き（2.5D）
         arr = to_np(kenburns(key_bg, f, 0, 100, 1.0, 1.08, 0.45, 0.5, 0.52, 0.48))
         sway_grass(arr, f, (0, int(H * 0.55), int(W * 0.42), H), amp=9)
-        fg = kenburns(key_fg, f, 0, 100, 1.0, 1.17, 0.47, 0.52, 0.62, 0.5)
+        fg = puppet(key_fg, bones_key(f), scale=KEY_S)
+        fg = kenburns(fg, f, 0, 100, 1.0, 1.17, 0.47, 0.52, 0.62, 0.5)
         fg = breathe(fg, 0.010 * math.sin(f * 2 * math.pi / 55), H * 0.95)
         paste_alpha(arr, fg, 0, 0)
         # 左上から差し込む光
@@ -482,6 +637,7 @@ def main():
             idle = clamp01(land / 8) if land >= 0 else 0
             bob = 7 * idle * abs(math.sin(lf * 2 * math.pi / 28 + i * 1.3))
             rot = 1.8 * idle * math.sin(lf * 2 * math.pi / 42 + i * 2.0)
+            c = puppet(c, bones_char(i, lf, st + 16), scale=CH_S, off=(-CH_PAD / CH_S, -CH_PAD / CH_S))
             cw, chh = int(c.width * sx), int(c.height * sy)
             im = c.resize((cw, chh), Image.BICUBIC).rotate(rot, expand=True, resample=Image.BICUBIC,
                                                           center=(cw / 2, chh))
@@ -496,7 +652,7 @@ def main():
                 ts = ease_out_back(prog(land, 2, 9), 2.0)
                 if ts > 0:
                     tg = tags[i].resize((max(1, int(tags[i].width * ts)), max(1, int(tags[i].height * ts))))
-                    top = GROUND - c.height - bob
+                    top = GROUND - c.height + CH_PAD - bob
                     paste_alpha(arr, tg, char_x[i] - tg.width / 2, top - 70 - tg.height / 2 + 30, clamp01(ts))
         leaves.draw(arr, f, 0.6)
         return arr
@@ -505,7 +661,8 @@ def main():
         lf = f - CUTS["group"][0]
         f0, f1 = CUTS["group"][0] - XF, CUTS["group"][1] + XF
         arr = to_np(kenburns(group_bg, f, f0, f1, 1.07, 1.0, 0.5, 0.45, 0.5, 0.5))
-        fg = kenburns(group_fg, f, f0, f1, 1.16, 1.0, 0.5, 0.42, 0.5, 0.5)
+        fg = puppet(group_fg, bones_group(lf), scale=GRP_S, off=(0, 40))
+        fg = kenburns(fg, f, f0, f1, 1.16, 1.0, 0.5, 0.42, 0.5, 0.5)
         fg = breathe(fg, 0.008 * math.sin(lf * 2 * math.pi / 40), H)
         paste_alpha(arr, fg, 0, 0)
         arr = arr * (1 - 0.62 * bottom_grad)
