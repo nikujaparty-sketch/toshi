@@ -4,14 +4,17 @@
 
 カット構成:
     0.0- 3.0s  キーアート（夕焼けの縁側）  「どこか懐かしい、あの秋を、もう一度。」
-    3.0- 6.0s  思い出の写真が机に落ちてくる（川・自転車・秋祭り・花火）
-    6.0- 9.5s  なかまたち（キャラクター4人）
-    9.5-12.0s  集合写真  「何もなかった。だから、全部あった。」
+               人物と背景を分けた2.5Dカメラ / 呼吸 / ススキの揺れ / 赤とんぼ
+    3.0- 6.0s  思い出の写真が机に落ちてくる（川・自転車・秋祭り・花火）  着地でゆらっと揺れる
+    6.0- 9.5s  なかまたち（キャラクター4人）  切り抜いた4人が順にジャンプして登場 → 揺れながら待機
+    9.5-12.0s  集合写真  「何もなかった。だから、全部あった。」  人物と背景を分けた2.5Dカメラ
    12.0-15.0s  タイトル『ぼくと、あの秋。』
+
+人物の切り抜きと背景は make_layers.py で事前に作る（assets/layers/）。
 
 使い方:
     python3 make_cm_15s.py <assets_dir> <fonts_dir> <out.mp4>
-      assets_dir: keyart.png（ポスター） / characters.png / group.png
+      assets_dir: keyart.png（ポスター） / group.png / layers/（make_layers.py の出力）
       fonts_dir : ShipporiMincho-800.ttf / KleeOne-600.ttf / InstrumentSerif-Regular.ttf
 """
 import math
@@ -20,6 +23,7 @@ import sys
 import wave
 from pathlib import Path
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -210,6 +214,74 @@ class Leaves:
         return base
 
 
+def dragonfly_sprites(size=110):
+    """赤とんぼ（羽ばたき2コマ）. 右向き."""
+    out = []
+    for phase in (0, 1):
+        s = size * 4
+        img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        cx, cy = s * 0.5, s * 0.5
+        wing = (255, 245, 230, 110) if phase == 0 else (255, 245, 230, 70)
+        span = s * (0.42 if phase == 0 else 0.30)
+        for dx, dy in ((-0.02, -1), (0.08, -1), (-0.02, 1), (0.08, 1)):
+            x = cx + dx * s
+            d.ellipse([x - s * 0.05, cy + dy * span - s * 0.035 if dy < 0 else cy,
+                       x + s * 0.05, cy if dy < 0 else cy + dy * span + s * 0.035], fill=wing,
+                      outline=(120, 70, 40, 90), width=3)
+        d.line([(cx - s * 0.38, cy), (cx + s * 0.12, cy)], fill=(196, 52, 30, 255), width=int(s * 0.035))
+        d.ellipse([cx + s * 0.08, cy - s * 0.04, cx + s * 0.18, cy + s * 0.04], fill=(150, 40, 25, 255))
+        out.append(img.resize((size, size), Image.LANCZOS))
+    return out
+
+
+class Dragonflies:
+    def __init__(self, specs):
+        self.spr = dragonfly_sprites()
+        self.specs = specs  # (x0, y0, vx, vy, scale, phase)
+
+    def draw(self, base, f, f0=0):
+        lf = f - f0
+        for x0, y0, vx, vy, sc, ph in self.specs:
+            # ふわっと進んでは止まる（ホバリング）動き
+            hover = 0.5 + 0.5 * math.sin(lf * 0.11 + ph)
+            x = x0 + vx * (lf + 18 * math.sin(lf * 0.11 + ph)) + 12 * math.sin(lf * 0.3 + ph)
+            y = y0 + vy * lf + 22 * math.sin(lf * 0.17 + ph * 2) * hover
+            dxdt = vx * (1 + 2 * math.cos(lf * 0.11 + ph))
+            dydt = vy + 22 * 0.17 * math.cos(lf * 0.17 + ph * 2) * hover
+            ang = -math.degrees(math.atan2(dydt, dxdt if abs(dxdt) > 1e-3 else 1e-3)) * 0.4
+            spr = self.spr[(lf // 1 + int(ph * 10)) % 2]
+            if vx < 0:
+                spr = spr.transpose(Image.FLIP_LEFT_RIGHT)
+                ang = -ang
+            spr = spr.resize((int(spr.width * sc), int(spr.height * sc))).rotate(ang, resample=Image.BICUBIC)
+            paste_alpha(base, spr, x - spr.width / 2, y - spr.height / 2, 0.95)
+        return base
+
+
+def breathe(layer, amount, anchor_y):
+    """RGBA レイヤーを anchor_y（下端側）を固定して縦に少し伸縮させる＝呼吸."""
+    if abs(amount) < 1e-4:
+        return layer
+    h2 = int(round(layer.height * (1 + amount)))
+    r = layer.resize((layer.width, h2), Image.BICUBIC)
+    top = int(round(anchor_y * (1 + amount) - anchor_y))
+    return r.crop((0, top, layer.width, top + layer.height))
+
+
+def sway_grass(arr, f, region, amp=7.0):
+    """region=(x0, y0, x1, y1) 内を風で横に揺らす（上ほど大きく揺れる）."""
+    x0, y0, x1, y1 = region
+    sub = np.ascontiguousarray(arr[y0:y1, x0:x1])
+    hh, ww = sub.shape[:2]
+    yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float32)
+    w = (1 - yy / hh) ** 1.5 * np.clip(xx / 60, 0, 1) * np.clip((ww - xx) / 60, 0, 1)
+    gust = 0.6 + 0.4 * math.sin(f * 0.05)
+    dx = amp * gust * w * np.sin(f * 0.19 - xx * 0.012 + yy * 0.004)
+    arr[y0:y1, x0:x1] = cv2.remap(sub, xx + dx, yy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    return arr
+
+
 # ---------------------------------------------------------------- 仕上げ（色調・ビネット・粒子）
 _yy, _xx = np.mgrid[0:H, 0:W].astype(np.float32)
 VIGNETTE = 1 - 0.38 * (((_xx - W / 2) / (W * 0.62)) ** 2 + ((_yy - H / 2) / (H * 0.68)) ** 2)
@@ -227,7 +299,7 @@ def finish(arr, f):
 
 
 # ---------------------------------------------------------------- 写真（ポラロイド）
-def polaroid(photo, caption, fnt, pw=600, angle=0.0):
+def polaroid(photo, caption, fnt, pw=600):
     ph = int(pw * photo.height / photo.width)
     photo = photo.resize((pw, ph), Image.LANCZOS).filter(ImageFilter.UnsharpMask(2, 60, 2))
     b, bb = 22, 84
@@ -246,7 +318,7 @@ def polaroid(photo, caption, fnt, pw=600, angle=0.0):
     shadow = shadow.filter(ImageFilter.GaussianBlur(14))
     canvas.paste(Image.new("RGBA", canvas.size, (40, 22, 10, 255)), (0, 0), shadow)
     canvas.alpha_composite(card, (pad, pad))
-    return canvas.rotate(angle, expand=True, resample=Image.BICUBIC)
+    return canvas
 
 
 def paper_bg(seed=1):
@@ -270,7 +342,6 @@ def main():
     F_lat = lambda s: ImageFont.truetype(str(fonts / "InstrumentSerif-Regular.ttf"), int(s))
 
     poster = Image.open(assets / "keyart.png").convert("RGB")
-    chars_img = Image.open(assets / "characters.png").convert("RGB")
     group = Image.open(assets / "group.png").convert("RGB")
 
     # --- 素材の切り出し
@@ -282,30 +353,40 @@ def main():
               (poster.crop((1184, 550, 1348, 652)), "秋祭りの夜", 3.0),
               (poster.crop((584, 804, 761, 890)), "最後の花火", -3.5)]
     pol_font = F_hand(34)
-    polaroids = [polaroid(p, c, pol_font, pw=560, angle=a) for p, c, a in thumbs]
+    polaroids = [polaroid(p, c, pol_font, pw=560) for p, c, a in thumbs]
+    pol_angles = [a for _, _, a in thumbs]
     pol_pos = [(560, 285), (1370, 300), (620, 800), (1320, 790)]  # 中心座標
 
-    panel_x = [(0, 386), (390, 768), (772, 1152), (1156, 1536)]
-    card_h = 840
-    cards = []
-    for x0, x1 in panel_x:
-        p = chars_img.crop((x0, 0, x1, 1024))
-        cw = int(card_h * p.width / p.height)
-        p = p.resize((cw, card_h), Image.LANCZOS)
-        c = Image.new("RGBA", (cw + 16, card_h + 16), (252, 248, 240, 255))
-        c.paste(p, (8, 8))
-        pad = 36
-        cv = Image.new("RGBA", (c.width + pad * 2, c.height + pad * 2), (0, 0, 0, 0))
-        sh = Image.new("L", cv.size, 0)
-        sh.paste(140, (pad + 6, pad + 12, pad + 6 + c.width, pad + 12 + c.height))
-        cv.paste(Image.new("RGBA", cv.size, (40, 22, 10, 255)), (0, 0), sh.filter(ImageFilter.GaussianBlur(12)))
-        cv.alpha_composite(c, (pad, pad))
-        cards.append(cv)
-    cards_total = sum(c.width - 72 for c in cards) + 3 * 44
-    cards_x0 = (W - cards_total) / 2
+    layers = assets / "layers"
+    key_bg = Image.open(layers / "key_bg.png").convert("RGB").resize(keyart.size, Image.LANCZOS)
+    key_bg = key_bg.filter(ImageFilter.UnsharpMask(2.5, 70, 2))
+    key_fg = Image.open(layers / "key_fg.png").convert("RGBA").resize(keyart.size, Image.LANCZOS)
+    key_fg = key_fg.filter(ImageFilter.UnsharpMask(2.5, 70, 2))
 
-    group_big = group.crop((0, 40, 1536, 904)).resize((W + 240, int((W + 240) * 864 / 1536)), Image.LANCZOS)
-    group_big = group_big.filter(ImageFilter.UnsharpMask(2, 60, 2))
+    # キャラクター（切り抜き）: 元パネルと同じ縮尺で並べる
+    CH_S = 0.84
+    char_imgs = []
+    for i in range(4):
+        c = Image.open(layers / f"char{i}.png").convert("RGBA")
+        char_imgs.append(c.resize((int(c.width * CH_S), int(c.height * CH_S)), Image.LANCZOS)
+                         .filter(ImageFilter.UnsharpMask(2, 50, 2)))
+    char_x = [330, 755, 1170, 1590]
+    GROUND = 1040
+    tag_specs = [("タイチ", (52, 110, 196)), ("やっさん", (232, 132, 30)), ("トシヒコ", (58, 140, 66)),
+                 ("クルミちゃん", (214, 86, 120))]
+    sh = Image.new("L", (360, 80), 0)
+    ImageDraw.Draw(sh).ellipse([30, 15, 330, 65], fill=150)
+    ground_shadow = Image.new("RGBA", sh.size, (30, 14, 4, 255))
+    ground_shadow.putalpha(sh.filter(ImageFilter.GaussianBlur(10)))
+
+    def g_big(im):
+        im = im.crop((0, 40, 1536, 904)).resize((W + 240, int((W + 240) * 864 / 1536)), Image.LANCZOS)
+        return im.filter(ImageFilter.UnsharpMask(2, 60, 2))
+    group_bg = g_big(Image.open(layers / "group_bg.png").convert("RGB"))
+    group_fg = g_big(Image.open(layers / "group_fg.png").convert("RGBA"))
+    chars_bg = to_np(cover(Image.open(layers / "key_bg.png").convert("RGB"), W, H).filter(ImageFilter.GaussianBlur(16)))
+    chars_bg = chars_bg * 0.85 + 0.06
+    chars_bg *= (1 - 0.35 * np.clip((_yy - H * 0.6) / (H * 0.4), 0, 1))[..., None]
 
     paper = paper_bg()
     title_bg = to_np(cover(poster.crop((0, 300, 805, 790)), W, H).filter(ImageFilter.GaussianBlur(26)))
@@ -315,7 +396,16 @@ def main():
     # --- テキスト
     open_l1 = char_layers("どこか懐かしい、", F_hand(84), (255, 250, 240), shadow=(60, 25, 5), shadow_blur=12)
     open_l2 = char_layers("あの秋を、もう一度。", F_hand(84), (255, 250, 240), shadow=(60, 25, 5), shadow_blur=12)
-    chars_head = text_layer("あの頃の、なかまたち。", F_hand(58), BROWN, shadow=None)
+    chars_head = text_layer("あの頃の、なかまたち。", F_hand(58), (255, 250, 240), shadow=(60, 25, 5), shadow_blur=10)
+    tags = []
+    for name, col in tag_specs:
+        fnt = F_hand(46)
+        tw = int(fnt.getlength(name))
+        tg = Image.new("RGBA", (tw + 56, 78), (0, 0, 0, 0))
+        dd = ImageDraw.Draw(tg)
+        dd.rounded_rectangle([4, 6, tw + 52, 74], radius=16, fill=col + (235,))
+        dd.text((28, 10), name, font=fnt, fill=(255, 255, 255))
+        tags.append(tg.rotate(-3, expand=True, resample=Image.BICUBIC))
     grp_l1 = char_layers("何もなかった。", F_min(96), (255, 252, 245), shadow=(20, 8, 0), shadow_blur=14,
                          shadow_alpha=0.9)
     grp_l2 = char_layers("だから、全部あった。", F_min(96), (255, 190, 110), shadow=(20, 8, 0), shadow_blur=14,
@@ -330,11 +420,18 @@ def main():
                       tracking=6)
 
     leaves = Leaves()
+    flies_open = Dragonflies([(1500, 160, -6.5, 0.6, 0.9, 0.0), (260, 420, 5.0, -1.0, 0.65, 2.1),
+                              (1050, 90, 3.2, 0.8, 0.5, 4.0)])
+    flies_title = Dragonflies([(-60, 200, 8.0, 0.5, 0.8, 1.0), (1980, 760, -7.0, -1.2, 0.6, 3.0)])
 
     # --- 各カットの描画
     def cut_open(f):
-        img = kenburns(keyart, f, 0, 100, 1.0, 1.12, 0.5, 0.5, 0.6, 0.48)
-        arr = to_np(img)
+        # 背景はゆっくり、人物はやや速く寄る＝奥行き（2.5D）
+        arr = to_np(kenburns(key_bg, f, 0, 100, 1.0, 1.08, 0.45, 0.5, 0.52, 0.48))
+        sway_grass(arr, f, (0, int(H * 0.55), int(W * 0.42), H), amp=9)
+        fg = kenburns(key_fg, f, 0, 100, 1.0, 1.17, 0.47, 0.52, 0.62, 0.5)
+        fg = breathe(fg, 0.010 * math.sin(f * 2 * math.pi / 55), H * 0.95)
+        paste_alpha(arr, fg, 0, 0)
         # 左上から差し込む光
         t = f / 90.0
         glow = np.exp(-(((_xx - W * (0.2 + 0.05 * t)) / (W * 0.45)) ** 2 + ((_yy - H * 0.15) / (H * 0.6)) ** 2))
@@ -343,6 +440,7 @@ def main():
         arr = arr * (1 - 0.35 * top)
         draw_chars(arr, *open_l1[:2], 130, 120, f, 12, step=3, dur=14)
         draw_chars(arr, *open_l2[:2], 210, 245, f, 40, step=3, dur=14)
+        flies_open.draw(arr, f)
         leaves.draw(arr, f)
         return arr
 
@@ -355,30 +453,61 @@ def main():
             if t <= 0:
                 continue
             s = 1.0 + 0.35 * (1 - ease_out_cubic(t))
+            d = f - DROPS[i] - 10
+            wob = 7 * math.exp(-max(d, 0) / 5) * math.cos(max(d, 0) * 0.9) if d >= 0 else 10 * (1 - t)
             p = pol if s == 1.0 else pol.resize((int(pol.width * s), int(pol.height * s)), Image.BICUBIC)
+            p = p.rotate(pol_angles[i] + wob, expand=True, resample=Image.BICUBIC)
             paste_alpha(arr, p, cx - p.width / 2 - drift, cy - p.height / 2 - drift * 0.3, ease_out_cubic(t))
         leaves.draw(arr, f, 0.7)
         return arr
 
     def cut_chars(f):
         lf = f - CUTS["chars"][0]
-        arr = paper.copy()
-        paste_alpha(arr, chars_head, (W - chars_head.width) / 2, 18 - (1 - ease_out_cubic(prog(lf, 2, 12))) * 10,
-                    ease_out_cubic(prog(lf, 2, 12)))
-        x = cards_x0 - 36
-        for i, c in enumerate(cards):
-            t = ease_out_back(prog(lf, 6 + i * 7, 14), 1.2)
-            a = clamp01(prog(lf, 6 + i * 7, 8))
-            y = 140 - 36 + (1 - t) * 160
-            paste_alpha(arr, c, x - lf * 0.3, y, a)
-            x += c.width - 72 + 44
+        arr = chars_bg.copy()
+        a = ease_out_cubic(prog(lf, 2, 12))
+        paste_alpha(arr, chars_head, (W - chars_head.width) / 2, 18 - (1 - a) * 10, a)
+        for i, c in enumerate(char_imgs):
+            st = 4 + i * 9
+            t = prog(lf, st, 16)
+            if t <= 0:
+                continue
+            land = lf - (st + 16)
+            # 下から飛び出して、少し上まで跳ねてから着地
+            y_off = (1 - ease_out_back(t, 2.6)) * 900
+            if land < 0:
+                sy = 1 + 0.07 * (1 - t)
+            else:
+                sy = 1 - 0.08 * math.exp(-land / 3.5) * math.cos(land * 0.95)
+            sx = 1 / math.sqrt(sy)
+            idle = clamp01(land / 8) if land >= 0 else 0
+            bob = 7 * idle * abs(math.sin(lf * 2 * math.pi / 28 + i * 1.3))
+            rot = 1.8 * idle * math.sin(lf * 2 * math.pi / 42 + i * 2.0)
+            cw, chh = int(c.width * sx), int(c.height * sy)
+            im = c.resize((cw, chh), Image.BICUBIC).rotate(rot, expand=True, resample=Image.BICUBIC,
+                                                          center=(cw / 2, chh))
+            feet_y = GROUND + y_off - bob
+            # 足元の影（高く跳ぶほど薄く小さく）
+            hgt = clamp01((GROUND - feet_y) / 300)
+            shd = ground_shadow.resize((int(ground_shadow.width * (1 - 0.4 * hgt)), ground_shadow.height))
+            paste_alpha(arr, shd, char_x[i] - shd.width / 2, GROUND - 40, (1 - 0.7 * hgt) * clamp01(t * 3))
+            paste_alpha(arr, im, char_x[i] - im.width / 2, feet_y - im.height)
+            # 名札：着地したらポンと出る
+            if land >= 0:
+                ts = ease_out_back(prog(land, 2, 9), 2.0)
+                if ts > 0:
+                    tg = tags[i].resize((max(1, int(tags[i].width * ts)), max(1, int(tags[i].height * ts))))
+                    top = GROUND - c.height - bob
+                    paste_alpha(arr, tg, char_x[i] - tg.width / 2, top - 70 - tg.height / 2 + 30, clamp01(ts))
         leaves.draw(arr, f, 0.6)
         return arr
 
     def cut_group(f):
         lf = f - CUTS["group"][0]
-        img = kenburns(group_big, f, CUTS["group"][0] - XF, CUTS["group"][1] + XF, 1.12, 1.0, 0.5, 0.45, 0.5, 0.5)
-        arr = to_np(img)
+        f0, f1 = CUTS["group"][0] - XF, CUTS["group"][1] + XF
+        arr = to_np(kenburns(group_bg, f, f0, f1, 1.07, 1.0, 0.5, 0.45, 0.5, 0.5))
+        fg = kenburns(group_fg, f, f0, f1, 1.16, 1.0, 0.5, 0.42, 0.5, 0.5)
+        fg = breathe(fg, 0.008 * math.sin(lf * 2 * math.pi / 40), H)
+        paste_alpha(arr, fg, 0, 0)
         arr = arr * (1 - 0.62 * bottom_grad)
         draw_chars(arr, *grp_l1[:2], (W - grp_l1[2]) / 2, 750, lf, 4, step=2, dur=10)
         draw_chars(arr, *grp_l2[:2], (W - grp_l2[2]) / 2, 880, lf, 30, step=2, dur=10)
@@ -414,6 +543,7 @@ def main():
             arr[y:y + 2, W // 2 - ln:W // 2 + ln] = arr[y:y + 2, W // 2 - ln:W // 2 + ln] * 0.4 + 0.6 * np.array(
                 [1.0, 0.92, 0.8], np.float32)
             paste_alpha(arr, soon, (W - soon.width) / 2, 830, a)
+        flies_title.draw(arr, f, CUTS["title"][0])
         leaves.draw(arr, f, 0.9)
         return arr
 
