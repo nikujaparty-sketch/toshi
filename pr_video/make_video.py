@@ -57,8 +57,8 @@ def cover(img, W, H, zoom=1.0, cx=0.5, cy=0.5):
     iw, ih = img.size
     scale = max(W / iw, H / ih) * zoom
     cw, ch = W / scale, H / scale
-    x0 = min(max(cx * iw - cw / 2, 0), iw - cw)
-    y0 = min(max(cy * ih - ch / 2, 0), ih - ch)
+    x0 = max(min(cx * iw - cw / 2, iw - cw), 0)
+    y0 = max(min(cy * ih - ch / 2, ih - ch), 0)
     return img.resize((W, H), Image.LANCZOS, box=(x0, y0, x0 + cw, y0 + ch))
 
 
