@@ -1,22 +1,26 @@
-"""『ぼくと、あの秋。』15秒CM ジェネレーター.
+"""『ぼくと、あの秋。』15秒CM（PS5 ゲームCM風）ジェネレーター.
 
-横型 1920x1080 / 30fps / 秋っぽいBGM（ナイロンギター・ピアノ・パッド・鈴虫）付き。
+横型 1920x1080 / 30fps / シネマスコープ風の黒帯 / 秋っぽいBGM + トレーラー風のヒット音.
 
 カット構成:
-    0.0- 3.0s  キーアート（夕焼けの縁側）  「どこか懐かしい、あの秋を、もう一度。」
+    0.0- 1.2s  導入：暗い青の空間に光の筋と粒子「IKEMOTO STUDIO PRESENTS」
+    1.2- 3.6s  キーアート（夕焼けの縁側）  「どこか懐かしい、あの秋を、もう一度。」
                人物と背景を分けた2.5Dカメラ / 呼吸 / 首の動き / 柴犬のハァハァ・まばたき / ススキ / 赤とんぼ
-    3.0- 6.0s  思い出の写真が机に落ちてくる（川・自転車・秋祭り・花火）  着地でゆらっと揺れる
-    6.0- 9.5s  なかまたち（キャラクター4人）  切り抜いた4人が順にジャンプして登場 → それぞれの仕草
+    3.6- 4.2s  黒カード「何もない町。」
+    4.2- 6.2s  思い出の写真が次々と落ちてくる（川・自転車・秋祭り・花火）
+    6.2- 6.8s  黒カード「あの頃の、なかまたち。」
+    6.8- 9.6s  切り抜いた4人が順にジャンプして登場 → それぞれの仕草
                （タイチ：アゴしゃくり / やっさん：笑い・指差し / トシヒコ：網振り / クルミ：のぞき込み・まばたき）
-    9.5-12.0s  集合写真  「何もなかった。だから、全部あった。」  人物と背景を分けた2.5Dカメラ
-   12.0-15.0s  タイトル『ぼくと、あの秋。』
+    9.6-11.8s  集合写真  「何もなかった。だから、全部あった。」
+   11.8-15.0s  エンドカード：タイトル（光が走る）/ PS5 / 発売日 近日発表 / CERO 審査予定 / ©
 
+本編カットには「※画面は開発中のものです。」を表示する。
 人物の切り抜きと背景は make_layers.py で事前に作る（assets/layers/）。
 
 使い方:
     python3 make_cm_15s.py <assets_dir> <fonts_dir> <out.mp4>
       assets_dir: keyart.png（ポスター） / group.png / layers/（make_layers.py の出力）
-      fonts_dir : ShipporiMincho-800.ttf / KleeOne-600.ttf / InstrumentSerif-Regular.ttf
+      fonts_dir : ShipporiMincho-800.ttf / KleeOne-600.ttf / InstrumentSans-Bold.ttf / InstrumentSans-Regular.ttf / ipagp.ttf
 """
 import math
 import subprocess
@@ -34,10 +38,16 @@ DURATION = 15.0
 N = int(FPS * DURATION)
 SR = 44100
 
-# カット（開始, 終了）フレーム。境界は XF フレームでクロスフェード
-CUTS = {"open": (0, 90), "photos": (90, 180), "chars": (180, 285), "group": (285, 360), "title": (360, N)}
-XF = 8
-DROPS = [96, 116, 136, 156]  # 写真が落ちるフレーム（効果音と同期）
+# カット（開始, 終了）フレーム
+CUTS = {"intro": (0, 36), "open": (36, 108), "card1": (108, 126), "photos": (126, 186), "card2": (186, 204),
+        "chars": (204, 288), "group": (288, 354), "title": (354, N)}
+# 各カットに入るときのクロスフェード長（0 = PS5 トレーラー風のハードカット）
+XFS = {"open": 8, "card1": 0, "photos": 0, "card2": 0, "chars": 0, "group": 6, "title": 0}
+XF = 6
+DROPS = [128, 138, 148, 158]  # 写真が落ちるフレーム（効果音と同期）
+DROP_LEN = 8
+BAR = 110  # シネマスコープ風の黒帯の高さ
+FOOTAGE = ("open", "photos", "chars", "group")
 
 CREAM = (250, 240, 222)
 BROWN = (74, 46, 30)
@@ -486,10 +496,8 @@ def main():
     assets, fonts, out_path = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
     F_min = lambda s: ImageFont.truetype(str(fonts / "ShipporiMincho-800.ttf"), int(s))
     F_hand = lambda s: ImageFont.truetype(str(fonts / "KleeOne-600.ttf"), int(s))
-    F_lat = lambda s: ImageFont.truetype(str(fonts / "InstrumentSerif-Regular.ttf"), int(s))
 
     poster = Image.open(assets / "keyart.png").convert("RGB")
-    group = Image.open(assets / "group.png").convert("RGB")
 
     # --- 素材の切り出し
     keyart = poster.crop((0, 330, 805, 783))
@@ -500,9 +508,9 @@ def main():
               (poster.crop((1184, 550, 1348, 652)), "秋祭りの夜", 3.0),
               (poster.crop((584, 804, 761, 890)), "最後の花火", -3.5)]
     pol_font = F_hand(34)
-    polaroids = [polaroid(p, c, pol_font, pw=560) for p, c, a in thumbs]
+    polaroids = [polaroid(p, c, pol_font, pw=480) for p, c, a in thumbs]
     pol_angles = [a for _, _, a in thumbs]
-    pol_pos = [(560, 285), (1370, 300), (620, 800), (1320, 790)]  # 中心座標
+    pol_pos = [(600, 345), (1340, 355), (650, 745), (1300, 735)]  # 中心座標
 
     layers = assets / "layers"
     key_bg = Image.open(layers / "key_bg.png").convert("RGB").resize(keyart.size, Image.LANCZOS)
@@ -513,7 +521,7 @@ def main():
     GRP_S = (W + 240) / 1536.0
 
     # キャラクター（切り抜き）: 元パネルと同じ縮尺で並べる
-    CH_S = 0.84
+    CH_S = 0.78
     CH_PAD = 40
     char_imgs = []
     for i in range(4):
@@ -525,7 +533,7 @@ def main():
         padded.paste(c, (CH_PAD, CH_PAD))
         char_imgs.append(padded)
     char_x = [330, 755, 1170, 1590]
-    GROUND = 1040
+    GROUND = 955
     tag_specs = [("タイチ", (52, 110, 196)), ("やっさん", (232, 132, 30)), ("トシヒコ", (58, 140, 66)),
                  ("クルミちゃん", (214, 86, 120))]
     sh = Image.new("L", (360, 80), 0)
@@ -543,14 +551,11 @@ def main():
     chars_bg *= (1 - 0.35 * np.clip((_yy - H * 0.6) / (H * 0.4), 0, 1))[..., None]
 
     paper = paper_bg()
-    title_bg = to_np(cover(poster.crop((0, 300, 805, 790)), W, H).filter(ImageFilter.GaussianBlur(26)))
-    title_bg = title_bg * 0.78 + np.array([0.20, 0.08, 0.0], np.float32) * 0.22
     bottom_grad = np.clip((_yy - H * 0.45) / (H * 0.55), 0, 1)[..., None] ** 1.4
 
     # --- テキスト
     open_l1 = char_layers("どこか懐かしい、", F_hand(84), (255, 250, 240), shadow=(60, 25, 5), shadow_blur=12)
     open_l2 = char_layers("あの秋を、もう一度。", F_hand(84), (255, 250, 240), shadow=(60, 25, 5), shadow_blur=12)
-    chars_head = text_layer("あの頃の、なかまたち。", F_hand(58), (255, 250, 240), shadow=(60, 25, 5), shadow_blur=10)
     tags = []
     for name, col in tag_specs:
         fnt = F_hand(46)
@@ -564,14 +569,53 @@ def main():
                          shadow_alpha=0.9)
     grp_l2 = char_layers("だから、全部あった。", F_min(96), (255, 190, 110), shadow=(20, 8, 0), shadow_blur=14,
                          shadow_alpha=0.9)
-    title = char_layers("ぼくと、あの秋。", F_min(190), (255, 251, 242), shadow=(70, 25, 0), shadow_blur=22,
-                        shadow_alpha=0.85, glow=((255, 200, 120), 26))
-    sub = text_layer("―  山里で過ごした30日間  ―", F_hand(50), (255, 244, 225), shadow=(70, 25, 0),
-                     shadow_blur=10)
-    genre = text_layer("ノスタルジック田舎生活アドベンチャー", F_hand(36), (255, 236, 205), shadow=(70, 25, 0),
-                       shadow_blur=8)
-    soon = text_layer("COMING  SOON", F_lat(64), (255, 248, 235), shadow=(70, 25, 0), shadow_blur=10,
-                      tracking=6)
+    title = char_layers("ぼくと、あの秋。", F_min(180), (255, 251, 242), shadow=(0, 0, 0), shadow_blur=20,
+                        shadow_alpha=0.6, glow=((255, 190, 110), 24))
+    F_sans = lambda s: ImageFont.truetype(str(fonts / "InstrumentSans-Bold.ttf"), int(s))
+    F_sansr = lambda s: ImageFont.truetype(str(fonts / "InstrumentSans-Regular.ttf"), int(s))
+    F_goth = lambda s: ImageFont.truetype(str(fonts / "ipagp.ttf"), int(s))
+    card_txt = {"card1": text_layer("何もない町。", F_min(92), (250, 250, 252), shadow=None,
+                                    glow=((120, 160, 255), 18)),
+                "card2": text_layer("あの頃の、なかまたち。", F_min(92), (250, 250, 252), shadow=None,
+                                    glow=((120, 160, 255), 18))}
+    presents = text_layer("IKEMOTO  STUDIO  PRESENTS", F_sansr(34), (225, 235, 255), shadow=None,
+                          glow=((90, 140, 255), 10), tracking=9)
+    disclaimer = text_layer("※画面は開発中のものです。", F_goth(24), (215, 215, 215), shadow=None, pad=10)
+    title_full = text_layer("ぼくと、あの秋。", F_min(180), (255, 252, 246), shadow=(0, 0, 0), shadow_blur=20,
+                            shadow_alpha=0.6, glow=((255, 190, 110), 24))
+    sub2 = text_layer("―  山里で過ごした30日間  ―", F_hand(44), (235, 238, 250), shadow=None)
+    ps5 = text_layer("PS5", F_sans(92), (255, 255, 255), shadow=None, tracking=4, pad=20)
+    ps5_small = text_layer("PlayStation®5", F_sansr(26), (210, 220, 240), shadow=None, tracking=2, pad=10)
+    release = text_layer("発売日  近日発表", F_goth(58), (255, 255, 255), shadow=None, pad=20)
+    release_s = text_layer("COMING SOON", F_sansr(26), (210, 220, 240), shadow=None, tracking=6, pad=10)
+    copyright_t = text_layer("©IKEMOTO STUDIO", F_sansr(24), (170, 180, 200), shadow=None, tracking=3, pad=10)
+    # CERO マーク（審査予定）
+    cero = Image.new("RGBA", (150, 170), (0, 0, 0, 0))
+    cd = ImageDraw.Draw(cero)
+    cd.rounded_rectangle([3, 3, 146, 166], radius=14, outline=(255, 255, 255, 255), width=4)
+    cd.rectangle([3, 60, 146, 64], fill=(255, 255, 255, 255))
+    for txt, fnt, y in (("CERO", F_sans(40), 10), ("審査予定", F_goth(30), 92)):
+        tw = fnt.getlength(txt)
+        cd.text(((150 - tw) / 2, y), txt, font=fnt, fill=(255, 255, 255, 255))
+
+    # 粒子（PS5 の UI のような、ゆっくり上る光の粒）
+    prng = np.random.default_rng(21)
+    particles = [(prng.uniform(0, W), prng.uniform(0, H), prng.uniform(0.4, 2.2), prng.uniform(1.5, 5.5),
+                  prng.uniform(0.25, 1.0), prng.uniform(0, 6.28)) for _ in range(110)]
+    glow_navy = np.exp(-(((_xx - W / 2) / (W * 0.55)) ** 2 + ((_yy - H * 0.62) / (H * 0.45)) ** 2))[..., None]
+    navy_bg = (np.array([0.008, 0.014, 0.04], np.float32)
+               + glow_navy * np.array([0.04, 0.10, 0.30], np.float32))
+
+    def draw_particles(arr, f, alpha=1.0):
+        lay = Image.new("L", (W, H), 0)
+        d = ImageDraw.Draw(lay)
+        for x, y, vy, r, a, ph in particles:
+            yy = (y - vy * f * 2.2) % H
+            xx = x + 14 * math.sin(f * 0.03 + ph)
+            tw = 0.6 + 0.4 * math.sin(f * 0.15 + ph * 3)
+            d.ellipse([xx - r, yy - r, xx + r, yy + r], fill=int(255 * a * tw))
+        m = np.asarray(lay.filter(ImageFilter.GaussianBlur(1.6)), np.float32)[..., None] / 255.0
+        return arr + m * np.array([0.75, 0.85, 1.0], np.float32) * alpha
 
     leaves = Leaves()
     flies_open = Dragonflies([(1500, 160, -6.5, 0.6, 0.9, 0.0), (260, 420, 5.0, -1.0, 0.65, 2.1),
@@ -579,22 +623,50 @@ def main():
     flies_title = Dragonflies([(-60, 200, 8.0, 0.5, 0.8, 1.0), (1980, 760, -7.0, -1.2, 0.6, 3.0)])
 
     # --- 各カットの描画
+    def cut_intro(f):
+        arr = navy_bg.copy()
+        # 中央を走る光の筋
+        t = ease_out_cubic(prog(f, 2, 22))
+        streak = np.exp(-((_yy - H / 2) / (2.0 + 26 * t)) ** 2) * np.exp(-((_xx - W / 2) / (W * 0.5 * t + 1)) ** 2)
+        core = np.exp(-((_yy - H / 2) / 1.6) ** 2) * np.exp(-((_xx - W / 2) / (W * 0.42 * t + 1)) ** 2)
+        fade = 1 - 0.6 * prog(f, 26, 10)
+        arr = arr + (streak[..., None] * np.array([0.15, 0.32, 0.9], np.float32) * 0.8
+                     + core[..., None] * np.array([0.9, 0.95, 1.0], np.float32)) * fade
+        arr = draw_particles(arr, f, 0.9)
+        a = ease_out_cubic(prog(f, 8, 12)) * (1 - prog(f, 28, 8))
+        paste_alpha(arr, presents, (W - presents.width) / 2, H / 2 + 40, a)
+        return arr
+
+    def cut_card(key):
+        def render_card(f):
+            lf = f - CUTS[key][0]
+            arr = navy_bg.copy() * 0.55
+            arr = draw_particles(arr, f, 0.4)
+            lay = card_txt[key]
+            a = ease_out_cubic(prog(lf, 0, 6))
+            sc = 1.06 - 0.06 * ease_out_cubic(prog(lf, 0, 18))
+            l2 = lay.resize((int(lay.width * sc), int(lay.height * sc)), Image.BICUBIC)
+            paste_alpha(arr, l2, (W - l2.width) / 2, (H - l2.height) / 2, a)
+            return arr
+        return render_card
+
     def cut_open(f):
+        lf = f - CUTS["open"][0]
         # 背景はゆっくり、人物はやや速く寄る＝奥行き（2.5D）
-        arr = to_np(kenburns(key_bg, f, 0, 100, 1.0, 1.08, 0.45, 0.5, 0.52, 0.48))
+        arr = to_np(kenburns(key_bg, lf, -8, 72, 1.0, 1.08, 0.45, 0.5, 0.52, 0.48))
         sway_grass(arr, f, (0, int(H * 0.55), int(W * 0.42), H), amp=9)
-        fg = puppet(key_fg, bones_key(f), scale=KEY_S)
-        fg = kenburns(fg, f, 0, 100, 1.0, 1.17, 0.47, 0.52, 0.62, 0.5)
+        fg = puppet(key_fg, bones_key(lf + 10), scale=KEY_S)
+        fg = kenburns(fg, lf, -8, 72, 1.0, 1.17, 0.47, 0.52, 0.62, 0.5)
         fg = breathe(fg, 0.010 * math.sin(f * 2 * math.pi / 55), H * 0.95)
         paste_alpha(arr, fg, 0, 0)
         # 左上から差し込む光
-        t = f / 90.0
+        t = lf / 72.0
         glow = np.exp(-(((_xx - W * (0.2 + 0.05 * t)) / (W * 0.45)) ** 2 + ((_yy - H * 0.15) / (H * 0.6)) ** 2))
         arr = arr + glow[..., None] * np.array([0.35, 0.18, 0.04], np.float32) * (0.6 + 0.4 * math.sin(f * 0.07))
         top = np.clip(1 - _yy / (H * 0.55), 0, 1)[..., None]
         arr = arr * (1 - 0.35 * top)
-        draw_chars(arr, *open_l1[:2], 130, 120, f, 12, step=3, dur=14)
-        draw_chars(arr, *open_l2[:2], 210, 245, f, 40, step=3, dur=14)
+        draw_chars(arr, *open_l1[:2], 130, 160, lf, 4, step=2, dur=12)
+        draw_chars(arr, *open_l2[:2], 210, 285, lf, 22, step=2, dur=12)
         flies_open.draw(arr, f)
         leaves.draw(arr, f)
         return arr
@@ -604,11 +676,11 @@ def main():
         arr = paper.copy()
         drift = lf * 0.35
         for i, (pol, (cx, cy)) in enumerate(zip(polaroids, pol_pos)):
-            t = prog(f, DROPS[i], 10)
+            t = prog(f, DROPS[i], DROP_LEN)
             if t <= 0:
                 continue
             s = 1.0 + 0.35 * (1 - ease_out_cubic(t))
-            d = f - DROPS[i] - 10
+            d = f - DROPS[i] - DROP_LEN
             wob = 7 * math.exp(-max(d, 0) / 5) * math.cos(max(d, 0) * 0.9) if d >= 0 else 10 * (1 - t)
             p = pol if s == 1.0 else pol.resize((int(pol.width * s), int(pol.height * s)), Image.BICUBIC)
             p = p.rotate(pol_angles[i] + wob, expand=True, resample=Image.BICUBIC)
@@ -619,14 +691,12 @@ def main():
     def cut_chars(f):
         lf = f - CUTS["chars"][0]
         arr = chars_bg.copy()
-        a = ease_out_cubic(prog(lf, 2, 12))
-        paste_alpha(arr, chars_head, (W - chars_head.width) / 2, 18 - (1 - a) * 10, a)
         for i, c in enumerate(char_imgs):
-            st = 4 + i * 9
-            t = prog(lf, st, 16)
+            st = 2 + i * 7
+            t = prog(lf, st, 14)
             if t <= 0:
                 continue
-            land = lf - (st + 16)
+            land = lf - (st + 14)
             # 下から飛び出して、少し上まで跳ねてから着地
             y_off = (1 - ease_out_back(t, 2.6)) * 900
             if land < 0:
@@ -637,7 +707,7 @@ def main():
             idle = clamp01(land / 8) if land >= 0 else 0
             bob = 7 * idle * abs(math.sin(lf * 2 * math.pi / 28 + i * 1.3))
             rot = 1.8 * idle * math.sin(lf * 2 * math.pi / 42 + i * 2.0)
-            c = puppet(c, bones_char(i, lf, st + 16), scale=CH_S, off=(-CH_PAD / CH_S, -CH_PAD / CH_S))
+            c = puppet(c, bones_char(i, lf, st + 14), scale=CH_S, off=(-CH_PAD / CH_S, -CH_PAD / CH_S))
             cw, chh = int(c.width * sx), int(c.height * sy)
             im = c.resize((cw, chh), Image.BICUBIC).rotate(rot, expand=True, resample=Image.BICUBIC,
                                                           center=(cw / 2, chh))
@@ -659,52 +729,67 @@ def main():
 
     def cut_group(f):
         lf = f - CUTS["group"][0]
-        f0, f1 = CUTS["group"][0] - XF, CUTS["group"][1] + XF
+        f0, f1 = CUTS["group"][0] - 6, CUTS["group"][1] + 6
         arr = to_np(kenburns(group_bg, f, f0, f1, 1.07, 1.0, 0.5, 0.45, 0.5, 0.5))
         fg = puppet(group_fg, bones_group(lf), scale=GRP_S, off=(0, 40))
         fg = kenburns(fg, f, f0, f1, 1.16, 1.0, 0.5, 0.42, 0.5, 0.5)
         fg = breathe(fg, 0.008 * math.sin(lf * 2 * math.pi / 40), H)
         paste_alpha(arr, fg, 0, 0)
         arr = arr * (1 - 0.62 * bottom_grad)
-        draw_chars(arr, *grp_l1[:2], (W - grp_l1[2]) / 2, 750, lf, 4, step=2, dur=10)
-        draw_chars(arr, *grp_l2[:2], (W - grp_l2[2]) / 2, 880, lf, 30, step=2, dur=10)
+        draw_chars(arr, *grp_l1[:2], (W - grp_l1[2]) / 2, 690, lf, 4, step=2, dur=10)
+        draw_chars(arr, *grp_l2[:2], (W - grp_l2[2]) / 2, 810, lf, 26, step=2, dur=10)
         leaves.draw(arr, f, 0.85)
         return arr
 
     def cut_title(f):
         lf = f - CUTS["title"][0]
-        arr = title_bg.copy()
-        # 夕日の光がゆっくり広がる
-        r = 0.35 + 0.15 * ease_out_cubic(prog(lf, 0, 60))
-        sun = np.exp(-(((_xx - W / 2) / (W * r)) ** 2 + ((_yy - H * 0.38) / (H * r * 1.2)) ** 2))[..., None]
-        arr = arr + sun * np.array([0.28, 0.14, 0.03], np.float32)
+        arr = navy_bg.copy()
+        # 下から夕焼け色がにじむ
+        warm = np.exp(-(((_xx - W / 2) / (W * 0.7)) ** 2 + ((_yy - H * 1.05) / (H * 0.45)) ** 2))[..., None]
+        arr = arr + warm * np.array([0.35, 0.14, 0.03], np.float32) * ease_out_cubic(prog(lf, 0, 40))
+        arr = draw_particles(arr, f, 0.7)
+        leaves.draw(arr, f, 0.6)
+        # タイトル：1文字ずつ浮かび上がる → 光が走る
         layers, xs, tw = title
         pad = 40
+        ty = 230
         for i, (lay, cx) in enumerate(zip(layers, xs)):
-            t = prog(lf, 6 + i * 3, 16)
+            t = prog(lf, 2 + i * 2, 14)
             if t <= 0:
                 continue
             e = ease_out_cubic(t)
-            l = lay
-            if e < 1:
-                l = lay.filter(ImageFilter.GaussianBlur((1 - e) * 10))
-            paste_alpha(arr, l, (W - tw) / 2 + cx - pad, 300 - pad + (1 - e) * 24, e)
-        a = ease_out_cubic(prog(lf, 34, 14))
-        paste_alpha(arr, sub, (W - sub.width) / 2, 560 + (1 - a) * 12, a)
-        a = ease_out_cubic(prog(lf, 44, 14))
-        paste_alpha(arr, genre, (W - genre.width) / 2, 650, a)
-        a = ease_out_cubic(prog(lf, 54, 16))
+            l = lay if e >= 1 else lay.filter(ImageFilter.GaussianBlur((1 - e) * 10))
+            paste_alpha(arr, l, (W - tw) / 2 + cx - pad, ty - pad + (1 - e) * 20, e)
+        sw = prog(lf, 26, 16)
+        if 0 < sw < 1:
+            tx0 = int((W - title_full.width) / 2)
+            ty0 = ty - 40
+            al = np.asarray(title_full, np.float32)[..., 3] / 255.0
+            hh, ww = al.shape
+            xs_ = np.arange(ww)[None, :] + np.arange(hh)[:, None] * 0.45
+            band = np.exp(-((xs_ - (-300 + sw * (ww + 600))) / 60.0) ** 2) * al
+            sub_ = arr[ty0:ty0 + hh, tx0:tx0 + ww]
+            arr[ty0:ty0 + hh, tx0:tx0 + ww] = sub_ + band[..., None] * np.array([1.0, 0.95, 0.85], np.float32) * 0.9
+        a = ease_out_cubic(prog(lf, 20, 12))
+        paste_alpha(arr, sub2, (W - sub2.width) / 2, 470 + (1 - a) * 10, a)
+        # 下段：PS5 / 発売日 / CERO
+        a = ease_out_cubic(prog(lf, 34, 12))
         if a > 0:
-            y = 820
-            ln = int(380 * a)
-            arr[y:y + 2, W // 2 - ln:W // 2 + ln] = arr[y:y + 2, W // 2 - ln:W // 2 + ln] * 0.4 + 0.6 * np.array(
-                [1.0, 0.92, 0.8], np.float32)
-            paste_alpha(arr, soon, (W - soon.width) / 2, 830, a)
+            y = 700
+            ln = int(700 * a)
+            arr[y:y + 2, W // 2 - ln:W // 2 + ln] = arr[y:y + 2, W // 2 - ln:W // 2 + ln] * 0.3 + 0.7 * np.array(
+                [0.85, 0.9, 1.0], np.float32)
+            paste_alpha(arr, ps5, 420 - ps5.width / 2, 735, a)
+            paste_alpha(arr, ps5_small, 420 - ps5_small.width / 2, 860, a)
+            paste_alpha(arr, release, W / 2 - release.width / 2, 755, a)
+            paste_alpha(arr, release_s, W / 2 - release_s.width / 2, 850, a)
+            paste_alpha(arr, cero, 1500 - cero.width / 2, 730, a)
+            paste_alpha(arr, copyright_t, W / 2 - copyright_t.width / 2, 1005, a * 0.9)
         flies_title.draw(arr, f, CUTS["title"][0])
-        leaves.draw(arr, f, 0.9)
         return arr
 
-    render = {"open": cut_open, "photos": cut_photos, "chars": cut_chars, "group": cut_group, "title": cut_title}
+    render = {"intro": cut_intro, "open": cut_open, "card1": cut_card("card1"), "photos": cut_photos,
+              "card2": cut_card("card2"), "chars": cut_chars, "group": cut_group, "title": cut_title}
     order = list(CUTS)
 
     audio = out_path.parent / "_bgm15.wav"
@@ -721,13 +806,23 @@ def main():
         arr = render[order[idx]](f)
         # 次のカットへのクロスフェード
         if idx + 1 < len(order):
-            nxt = CUTS[order[idx + 1]][0]
-            if f >= nxt - XF:
-                w = ease_in_out((f - (nxt - XF)) / XF)
-                arr = arr * (1 - w) + render[order[idx + 1]](f) * w
-        arr = finish(arr, f)
+            nk = order[idx + 1]
+            nxt, xf = CUTS[nk][0], XFS[nk]
+            if xf and f >= nxt - xf:
+                w = ease_in_out((f - (nxt - xf)) / xf)
+                arr = arr * (1 - w) + render[nk](f) * w
+        cur = order[idx]
+        if cur in FOOTAGE:
+            arr = finish(arr, f)
+        else:
+            arr = np.clip(arr + GRAIN[f % len(GRAIN)].repeat(2, 0).repeat(2, 1) * 0.6, 0, 1)
+        # 本編はシネマスコープ風の黒帯 + 開発中表記
+        if cur in FOOTAGE:
+            arr[:BAR] = 0
+            arr[H - BAR:] = 0
+            paste_alpha(arr, disclaimer, W - disclaimer.width - 40, H - BAR + (BAR - disclaimer.height) / 2, 0.9)
         # 冒頭は黒からフェードイン、最後は軽くフェードアウト
-        arr = arr * ease_in_out(prog(f, 0, 14)) * (1 - 0.85 * ease_in_out(prog(f, N - 10, 10)))
+        arr = arr * ease_in_out(prog(f, 0, 6)) * (1 - 0.9 * ease_in_out(prog(f, N - 10, 10)))
         proc.stdin.write((np.clip(arr, 0, 1) * 255).astype(np.uint8).tobytes())
         if f % 30 == 0:
             print(f"frame {f}/{N}", flush=True)
@@ -819,19 +914,20 @@ def make_audio(path):
 
     e8 = 0.375  # 80BPM の8分音符
     # (開始, 終了, ベース, アルペジオ構成音)
+    T_END = CUTS["title"][0] / FPS  # 11.8s
     chords = [
-        (0.0, 3.0, "A2", ["A3", "E4", "B4", "C5", "E5"]),       # Am9
-        (3.0, 6.0, "F2", ["F3", "C4", "E4", "A4", "C5"]),       # Fmaj7
-        (6.0, 7.5, "G2", ["G3", "D4", "A4", "B4", "D5"]),       # Gadd9
-        (7.5, 9.375, "E2", ["E3", "B3", "D4", "G4", "B4"]),     # Em7
-        (9.375, 10.875, "D2", ["D3", "A3", "C4", "F4", "A4"]),  # Dm7
-        (10.875, 12.0, "G2", ["G3", "D4", "F4", "B4", "D5"]),   # G7
-        (12.0, 15.0, "C2", ["C3", "G3", "B3", "D4", "E4", "G4"]),  # Cmaj9
+        (1.2, 3.6, "A2", ["A3", "E4", "B4", "C5", "E5"]),       # Am9
+        (3.6, 6.2, "F2", ["F3", "C4", "E4", "A4", "C5"]),       # Fmaj7
+        (6.2, 7.4, "G2", ["G3", "D4", "A4", "B4", "D5"]),       # Gadd9
+        (7.4, 9.6, "E2", ["E3", "B3", "D4", "G4", "B4"]),       # Em7
+        (9.6, 10.8, "D2", ["D3", "A3", "C4", "F4", "A4"]),      # Dm7
+        (10.8, T_END, "G2", ["G3", "D4", "F4", "B4", "D5"]),    # G7
+        (T_END, 15.0, "C2", ["C3", "G3", "B3", "D4", "E4", "G4"]),  # Cmaj9
     ]
     pattern = [0, 2, 1, 3, 2, 4, 3, 1]
     seed = 0
     for c0, c1, bass, tones in chords:
-        last = c0 >= 12.0
+        last = c0 >= T_END
         add(c0, pluck(midi(nn(bass)), 3.5 if last else c1 - c0 + 0.6, seed=seed), 0.55, -0.1)
         if last:
             # 最後はゆっくりストローク
@@ -858,15 +954,15 @@ def make_audio(path):
     R += pad_sig * 0.10
 
     # ピアノのメロディ（郷愁のある下降ライン）
-    melody = [(0.75, "E5", 0.75), (1.5, "D5", 0.375), (1.875, "C5", 0.375), (2.25, "D5", 0.75),
-              (3.0, "C5", 0.75), (3.75, "A4", 0.75), (4.5, "C5", 0.375), (4.875, "E5", 1.1),
-              (6.0, "D5", 0.75), (6.75, "B4", 0.5), (7.25, "D5", 0.25),
-              (7.5, "G5", 0.75), (8.25, "E5", 1.1),
-              (9.375, "F5", 0.75), (10.125, "E5", 0.375), (10.5, "D5", 0.375),
-              (10.875, "D5", 0.5), (11.375, "B4", 0.6),
-              (12.0, "C5", 2.5), (12.0, "E5", 2.5), (12.75, "G5", 2.0), (13.5, "C6", 1.5)]
+    melody = [(1.95, "E5", 0.75), (2.7, "D5", 0.375), (3.075, "C5", 0.375), (3.3, "D5", 0.3),
+              (3.6, "C5", 0.75), (4.35, "A4", 0.75), (5.1, "C5", 0.375), (5.475, "E5", 0.7),
+              (6.2, "D5", 0.6), (6.8, "B4", 0.6),
+              (7.4, "G5", 0.75), (8.15, "E5", 0.85), (9.0, "D5", 0.5),
+              (9.6, "F5", 0.6), (10.2, "E5", 0.3), (10.5, "D5", 0.3),
+              (10.8, "D5", 0.5), (11.3, "B4", 0.5),
+              (T_END, "C5", 2.5), (T_END, "E5", 2.5), (T_END + 0.7, "G5", 2.0), (T_END + 1.4, "C6", 1.5)]
     for t0, n_, d in melody:
-        g = 0.22 if t0 < 12 else 0.16
+        g = 0.22 if t0 < T_END else 0.16
         add(t0, piano(midi(nn(n_)), d), g, 0.15)
         add(t0 + 0.23, piano(midi(nn(n_)), d), g * 0.18, -0.4)  # ディレイ
 
@@ -880,9 +976,59 @@ def make_audio(path):
         env = onepole_lp(trill * burst, 300)
         add(t0, np.sin(2 * np.pi * freq * t) * env * np.minimum(1, t / 0.3) * np.minimum(1, (dur - t) / 0.4),
             gain, pan)
-    cricket(0.0, 4.2, 4300, 0.035, -0.6)
-    cricket(0.4, 3.6, 4620, 0.025, 0.6)
-    cricket(12.0, 3.0, 4400, 0.025, 0.5)
+    cricket(1.2, 3.0, 4300, 0.035, -0.6)
+    cricket(1.5, 2.4, 4620, 0.025, 0.6)
+    cricket(T_END, 3.2, 4400, 0.022, 0.5)
+
+    # --- トレーラー風の効果音
+    def boom(t0, gain=1.0, dur=1.6):
+        n = int(dur * SR)
+        t = np.arange(n) / SR
+        fr = 34 + 70 * np.exp(-t * 9)
+        body = np.sin(2 * np.pi * np.cumsum(fr) / SR) * np.exp(-t * 2.4)
+        click = onepole_lp(rng.standard_normal(n), 2500) * np.exp(-t * 40) * 0.6
+        add(t0, (body + click) * gain)
+
+    def whoosh(t0, dur, gain=0.3, pan=0.0):
+        n = int(dur * SR)
+        t = np.arange(n) / SR
+        env = np.sin(np.pi * np.clip(t / dur, 0, 1)) ** 2
+        x = rng.standard_normal(n)
+        x = onepole_lp(x, 2400) - onepole_lp(x, 300)
+        add(t0, x * env / (np.abs(x).max() + 1e-9) * gain, pan)
+
+    def riser(t0, t1, gain=0.12):
+        n = int((t1 - t0) * SR)
+        t = np.arange(n) / SR
+        k = t / (t1 - t0)
+        fr = 180 * 2 ** (k * 2.2)
+        tone = np.sin(2 * np.pi * np.cumsum(fr) / SR) + 0.5 * np.sin(2 * np.pi * np.cumsum(fr * 1.5) / SR)
+        x = rng.standard_normal(n)
+        noise = onepole_lp(x, 5000) - onepole_lp(x, 800)
+        add(t0, (tone * 0.4 + noise / (np.abs(noise).max() + 1e-9)) * k ** 2.5 * gain)
+
+    def drone(t0, dur, gain=0.12):
+        n = int(dur * SR)
+        t = np.arange(n) / SR
+        env = np.minimum(1, t / 0.3) * np.clip((dur - t) / 0.4, 0, 1)
+        sig = sum(np.sin(2 * np.pi * f_ * t + i) for i, f_ in enumerate((65.4, 98.0, 130.8, 196.2)))
+        shimmer = sum(np.sin(2 * np.pi * f_ * t) * (0.5 + 0.5 * np.sin(2 * np.pi * 3.1 * t + i))
+                      for i, f_ in enumerate((1046.5, 1568.0, 2093.0)))
+        add(t0, (sig / 4 + shimmer * 0.08) * env * gain)
+
+    drone(0.0, 1.4, 0.16)                 # 導入：低いドローンときらめき
+    riser(0.2, 1.2, 0.08)
+    whoosh(0.85, 0.5, 0.25)
+    boom(1.2, 0.35)                       # 本編イン
+    boom(CUTS["card1"][0] / FPS, 0.6)     # 黒カード
+    whoosh(CUTS["photos"][0] / FPS - 0.25, 0.4, 0.22, 0.3)
+    boom(CUTS["card2"][0] / FPS, 0.6)
+    whoosh(CUTS["chars"][0] / FPS - 0.25, 0.4, 0.22, -0.3)
+    for i in range(4):                    # キャラのジャンプ
+        whoosh((CUTS["chars"][0] + 2 + i * 7) / FPS, 0.35, 0.10, -0.6 + 0.4 * i)
+    whoosh(CUTS["group"][0] / FPS - 0.2, 0.4, 0.18)
+    riser(10.6, T_END, 0.12)
+    boom(T_END, 1.0, 2.4)                 # タイトルのヒット
 
     # 風（秋風・枯れ葉のざわめき）
     n = total
@@ -895,14 +1041,14 @@ def make_audio(path):
 
     # 写真が机に置かれる「パサッ」
     for i, fr in enumerate(DROPS):
-        t0 = fr / FPS + 0.18
+        t0 = (fr + DROP_LEN) / FPS - 0.03
         k = int(0.12 * SR)
         noise = rng.standard_normal(k) * np.exp(-np.arange(k) / (0.025 * SR))
         add(t0, noise - onepole_lp(noise, 600), 0.10, -0.3 if i % 2 == 0 else 0.3)
 
     # タイトルのウインドチャイム
     for k, nm in enumerate(["E6", "G6", "B6", "D7", "G7"]):
-        add(12.15 + 0.07 * k, piano(midi(nn(nm)), 0.2), 0.05, -0.5 + 0.25 * k)
+        add(T_END + 0.15 + 0.07 * k, piano(midi(nn(nm)), 0.2), 0.05, -0.5 + 0.25 * k)
 
     # 簡易リバーブ（くし形ディレイの和）
     def reverb(x):
@@ -915,7 +1061,7 @@ def make_audio(path):
 
     L, R = L[:total], R[:total]
     t = np.arange(total) / SR
-    master = np.minimum(1, t / 0.6) * np.clip((DURATION - t) / 1.2, 0, 1) ** 1.2
+    master = np.minimum(1, t / 0.05) * np.clip((DURATION - t) / 1.2, 0, 1) ** 1.2
     st = np.stack([L * master, R * master], 1)
     st = np.tanh(st / (np.abs(st).max() + 1e-9) * 1.1) * 0.85
     with wave.open(str(path), "wb") as w:
